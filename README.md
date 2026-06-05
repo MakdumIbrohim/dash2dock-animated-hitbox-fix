@@ -1,84 +1,335 @@
-# 🚀 Solusi Layar Bawah Tidak Bisa Diklik (Dead Zone / Phantom Window) di Ubuntu/GNOME 
+# 🚀 Solusi Layar Bawah Tidak Bisa Diklik (Dead Zone / Phantom Window) di Ubuntu/GNOME
 
-Repositori ini berisi panduan teknis dan perbaikan (*patch*) untuk mengatasi masalah **area bawah layar tidak bisa diklik** saat menggunakan ekstensi **Dash2Dock Animated** (atau Dash2Dock Lite) di GNOME Shell, terutama pada sesi Wayland di Ubuntu.
-
-## 🐛 Deskripsi Masalah
-
-Jika kamu menggunakan ekstensi **Dash to Dock Animated**, kamu mungkin menyadari bahwa area bawah layar (tepat di atas *dock*) tiba-tiba menjadi "kebal klik" (*unclickable*). Kamu tidak bisa mengklik tombol aplikasi, *browser*, atau *tools* lain yang berada di area tersebut.
-
-**Gejala:**
-* Ikon atau tombol aplikasi yang berada di dekat *dock* tidak merespons klik (seperti terhalang sesuatu).
-* Saat fitur animasi (seperti efek *magnify/hover*) diaktifkan, masalah ini muncul. Jika animasi dimatikan, klik berfungsi normal.
-
-![Area yang tidak terjangkau](image_92fa3c.png)
-*Gambar: Ikon pensil di sebelah kanan bawah tidak bisa diklik meskipun secara visual tidak tertutup oleh dock.*
-
-### 🔍 Penyebab Teknis (The Root Cause)
-
-Masalah ini disebabkan oleh pembuatan **"Invisible Bounding Box" (Kotak Transparan)** oleh ekstensi untuk mendeteksi pergerakan kursor (*hover trigger zone*). 
-
-Pada file konfigurasi ekstensi, *developer* menambahkan nilai *padding/margin* yang sangat besar (bisa 2 hingga 3 kali lipat ukuran ikon) agar animasi terlihat mulus dari jarak jauh. Akibatnya, kotak transparan ini meluas ke atas dan memblokir interaksi *mouse* pada aplikasi di bawahnya.
-
-![Area Transparan yang memblokir layar](image_93113d.png)
-*Gambar: Garis ungu menunjukkan seberapa besar kotak pemicu (invisible box) yang menutupi layar kamu.*
+Repositori ini berisi panduan teknis dan patch untuk mengatasi masalah **area bawah layar tidak bisa diklik** saat menggunakan ekstensi **Dash2Dock Animated / Dash2Dock Lite** di GNOME Shell, terutama pada sesi **Wayland** di Ubuntu.
 
 ---
 
-## 🛠️ Cara Memperbaiki (Langkah-langkah Teknis)
+# 🐛 Deskripsi Masalah
 
-Untuk menghilangkan *bug* ini, kita harus memodifikasi nilai perhitungan ukuran *footprint* (`fp`) secara langsung di dalam kode JavaScript ekstensi tersebut.
+Jika kamu menggunakan ekstensi **Dash2Dock Animated**, kamu mungkin menyadari bahwa area bawah layar (tepat di atas dock) tiba-tiba menjadi:
 
-### Langkah 1: Buka Direktori Ekstensi
-Buka terminal dan arahkan ke direktori tempat ekstensi GNOME kamu terinstal:
+- tidak bisa diklik
+- seperti tertutup jendela transparan
+- memblokir tombol aplikasi di belakangnya
+
+Fenomena ini biasa disebut:
+
+- Dead Zone
+- Phantom Window
+- Invisible Hitbox
+- Ghost Input Region
+
+---
+
+## Gejala
+
+- Tombol aplikasi di dekat dock tidak merespons klik
+- Tombol browser atau editor seperti VSCode tidak bisa ditekan
+- Area kosong di atas dock terasa seperti “tertutup sesuatu”
+- Saat animasi hover/magnify dimatikan, masalah langsung hilang
+
+---
+
+# 🔍 Penyebab Teknis (Root Cause)
+
+Masalah ini disebabkan oleh **reactive input region** atau **bounding box transparan** yang dibuat oleh ekstensi dock untuk mendeteksi hover mouse.
+
+Di dalam `dock.js`, extension menghitung ukuran footprint (`fp`) menggunakan rumus:
+
+```javascript
+let magnify = this.extension.animation_magnify * 1.8;
+let fp = iconSize * 2 + iconSize * (0.6 * (1 + magnify));
+```
+
+Nilai `fp` ini ternyata bukan hanya untuk animasi.
+
+Nilai tersebut juga dipakai sebagai:
+
+- tinggi actor dock
+- area collision mouse
+- reactive region
+- allocation box GNOME Shell
+
+Akibatnya:
+
+```text
+Visual Dock Kecil
+Tetapi Hitbox Dock Sangat Besar
+```
+
+Area transparan inilah yang memblokir klik mouse pada aplikasi di belakangnya.
+
+---
+
+# ⚠️ Kenapa Masalah Lebih Terasa di Wayland?
+
+Pada Wayland:
+
+- input region lebih strict
+- setiap surface benar-benar memiliki ownership event
+- actor transparan tetap menerima input mouse
+
+Akibatnya invisible hitbox benar-benar memakan event klik.
+
+Sedangkan pada X11, event forwarding masih lebih longgar sehingga bug kadang tidak terlalu terasa.
+
+---
+
+# 🛠️ Solusi Perbaikan (Patch)
+
+## Langkah 1 — Buka Direktori Extension
+
 ```bash
 cd ~/.local/share/gnome-shell/extensions/dash2dock-lite@icedman.github.com
 ```
-*Catatan: Nama folder mungkin sedikit berbeda tergantung versi yang kamu instal.*
 
-![File Ekstensi](image_93191e.png)
+Catatan:
+Nama folder bisa sedikit berbeda tergantung versi extension.
 
-### Langkah 2: Edit File `dock.js`
-Buka file `dock.js` menggunakan *text editor* andalanmu (contoh: VS Code, Nano, atau Gedit):
+---
+
+# Langkah 2 — Edit `dock.js`
+
+Buka file:
+
 ```bash
 code dock.js
 ```
 
-### Langkah 3: Ubah Nilai Footprint (`fp`)
-Gunakan fitur pencarian (*Ctrl+F*) dan cari kode fungsi `layout()`. Temukan baris yang berisi deklarasi variabel `fp` (biasanya berada di sekitar baris **1139**).
+atau editor lain seperti:
 
-**Kode Asli:**
+```bash
+nano dock.js
+```
+
+---
+
+# Langkah 3 — Perbaiki Nilai Footprint (`fp`)
+
+Cari bagian:
+
 ```javascript
 // computation derived from animation scale
 let magnify = this.extension.animation_magnify * 1.8;
 let fp = iconSize * 2 + iconSize * (0.6 * (1 + magnify));
 ```
 
-**Kode Perbaikan:**
-Ubah pengali `iconSize * 2` menjadi angka yang jauh lebih kecil, misalnya **`0.9`** atau bahkan **`0.0`** untuk menghilangkan *padding* berlebih tanpa merusak animasi.
+Ganti menjadi:
 
 ```javascript
 // computation derived from animation scale
 let magnify = this.extension.animation_magnify * 1.8;
-let fp = iconSize * 0.9 + iconSize * (0.6 * (1 + magnify)); 
-// ATAU gunakan 0.0 jika 0.9 masih dirasa terlalu tinggi
+let fp = iconSize * 0.9 + iconSize * (0.6 * (1 + magnify));
 ```
-
-> **💡 Tips Eksperimen untuk Pengguna X11:** Agar bisa mengubah ukurannya, pastikan ketik `Alt + F2`, ketik `r`, lalu `Enter` begitu seterusnya sampai mengecil dan menyesuaikan. *(Catatan: Untuk pengguna Wayland, shortcut ini tidak berfungsi, kamu harus melakukan Log Out dan Log In kembali).*
-
-![Bukti Perbaikan Berhasil](image_9df2e6.png)
-*Gambar: Bukti penyesuaian kode di VS Code. Garis ungu pemicu animasi kini menempel sempurna dengan dock dan tidak memblokir area layar.*
-
-### Langkah 4: Simpan dan Muat Ulang GNOME Shell (Penting!)
-Setelah menyimpan perubahan pada `dock.js`, sistem harus dimuat ulang agar kode baru dieksekusi.
-
-* **Pengguna X11:** Tekan `Alt + F2`, ketik `r`, lalu tekan `Enter`.
-* **Pengguna Wayland (Ubuntu Default saat ini):** Kamu **WAJIB melakukan Log Out (Keluar Sesi) dan Log In kembali** ke sistem Ubuntu kamu.
 
 ---
 
-## ✅ Hasil
+# 🧠 Kenapa Ini Memperbaiki Bug?
 
-Setelah *login* kembali, area bawah layar kamu akan berfungsi normal 100%, dan animasi *hover/magnify* pada Dash2Dock Animated akan tetap berjalan dengan mulus!
+Sebelumnya:
 
-### 🏷️ Tags / Keywords (Untuk Pencarian)
-`gnome-shell-extension`, `dash-to-dock-animated`, `dash2dock-lite`, `wayland-bug`, `ubuntu-unclickable-screen`, `phantom-window`, `gnome-40+`, `hitbox-fix`, `javascript-patch`.
+```text
+fp terlalu besar
+↓
+Dock actor terlalu tinggi
+↓
+Invisible hitbox meluas ke atas
+↓
+Klik mouse terblokir
+```
+
+Sesudah diperkecil:
+
+```text
+Hitbox menyesuaikan ukuran dock
+↓
+Area transparan mengecil
+↓
+Klik mouse kembali normal
+```
+
+---
+
+# ⚠️ Masalah Baru: Animasi Bounce / Magnify Terpotong
+
+Setelah `fp` diperkecil, biasanya muncul efek samping:
+
+- icon bounce terpotong
+- magnify kepotong bagian atas
+- animasi tidak bebas keluar dock
+
+Penyebabnya adalah:
+
+```javascript
+clip_to_allocation: true,
+```
+
+pada constructor utama dock.
+
+GNOME Shell akan memotong semua child actor yang keluar dari ukuran parent container.
+
+Karena sekarang ukuran dock lebih kecil, icon animasi jadi keluar dari container lalu di-clip compositor GNOME.
+
+---
+
+# ✅ Solusi Tambahan (Penting)
+
+Cari bagian constructor:
+
+```javascript
+super._init({
+```
+
+Temukan:
+
+```javascript
+clip_to_allocation: true,
+```
+
+Ubah menjadi:
+
+```javascript
+clip_to_allocation: false,
+```
+
+---
+
+# 🔥 Kenapa Ini Penting?
+
+Dengan `clip_to_allocation: false`:
+
+- icon boleh render keluar container
+- bounce animation tidak terpotong
+- magnify kembali smooth
+- dock tetap punya hitbox kecil
+- dead zone tetap hilang
+
+---
+
+# ✅ Kombinasi Patch Terbaik
+
+Gunakan dua patch berikut sekaligus:
+
+## Patch 1 — Kecilkan Footprint
+
+```javascript
+let fp = iconSize * 0.9 + iconSize * (0.6 * (1 + magnify));
+```
+
+## Patch 2 — Disable Clipping
+
+```javascript
+clip_to_allocation: false,
+```
+
+---
+
+# 🎯 Hasil Akhir
+
+Dengan kombinasi ini:
+
+✅ Dead zone hilang  
+✅ Area bawah layar bisa diklik lagi  
+✅ Hover animation tetap smooth  
+✅ Bounce animation tidak kepotong  
+✅ Magnify tetap berjalan normal  
+✅ Tidak ada invisible phantom window  
+
+---
+
+# 🔄 Reload GNOME Shell
+
+## Pengguna X11
+
+Tekan:
+
+```text
+Alt + F2
+```
+
+lalu ketik:
+
+```text
+r
+```
+
+kemudian Enter.
+
+---
+
+## Pengguna Wayland
+
+Wayland tidak mendukung restart GNOME Shell menggunakan `Alt + F2`.
+
+Kamu WAJIB:
+
+```text
+Log Out → Log In kembali
+```
+
+agar perubahan JS extension dimuat ulang.
+
+---
+
+# 🧪 Tips Eksperimen
+
+Jika dock masih terasa terlalu besar atau terlalu kecil:
+
+Coba ubah:
+
+```javascript
+iconSize * 0.8
+iconSize * 0.9
+iconSize * 1.0
+iconSize * 1.1
+```
+
+Biasanya nilai paling stabil ada di:
+
+```text
+0.9 sampai 1.1
+```
+
+---
+
+# 🧠 Analisis Teknis Tambahan
+
+Masalah ini adalah contoh klasik:
+
+```text
+Visual Region ≠ Interactive Region
+```
+
+pada GUI modern berbasis compositor.
+
+Extension menggunakan satu variabel (`fp`) untuk:
+
+- render size
+- hover trigger
+- collision area
+- allocation box
+
+Padahal idealnya:
+render area dan input area dipisah.
+
+Karena itu patch ini bekerja dengan:
+
+1. mengecilkan input footprint
+2. mengizinkan visual overflow keluar actor
+
+---
+
+# 🏷️ Keywords
+
+`gnome-shell-extension`  
+`dash-to-dock-animated`  
+`dash2dock-lite`  
+`wayland-bug`  
+`ubuntu-unclickable-screen`  
+`phantom-window`  
+`hitbox-fix`  
+`javascript-patch`  
+`clip_to_allocation`  
+`gnome-shell-deadzone`  
+`dock-hover-bug`  
+`invisible-hitbox`
